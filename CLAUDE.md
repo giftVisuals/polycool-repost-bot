@@ -54,12 +54,12 @@ data/state.json      - runtime state (last processed post ID, activity log) — 
 
 ## ⚠️ SECURITY — read this before touching git
 
-A `.env` file containing real credentials was previously committed to this repo **while the repo was Public**. This is unresolved as of the last check.
+A `.env` file containing real credentials was committed to this repo (commit `897d370`) and pushed to GitHub. **As of 2026-08-02: `.env` has been removed from git tracking** (`git rm --cached`, committed on `claude/claude-md-review-1rh83m`), but it still exists in that old commit's history, and **the exposed Apify token and Post Bridge API key have NOT been confirmed rotated yet** — treat them as compromised until the developer regenerates both and confirms.
 
 Before any other work in this repo:
-1. Confirm `.env` is **not** present in the current repo file listing (only `.env.example` should exist there).
-2. Confirm the developer has rotated/regenerated the Post Bridge API key and Apify token that were exposed. If unconfirmed, **ask the developer directly** — don't assume it's done.
-3. Never re-add `.env`, or any file containing real keys, to a commit — check `.gitignore` covers it before every commit that touches env-related files.
+1. Confirm `.env` is **not tracked** (`git ls-files | grep .env` should return nothing but `.env.example`) — currently true as of the last check.
+2. Confirm the developer has rotated/regenerated the Post Bridge API key and Apify token that were exposed. **Still unconfirmed** — ask the developer directly before assuming it's safe.
+3. Never re-add `.env`, or any file containing real keys, to a commit — check `.gitignore` covers it before every commit that touches env-related files. Real key values go only into Railway's environment variable settings at deploy time, never into a committed file.
 4. Never print, log, or echo full key values back in chat, commit messages, or code comments.
 
 ## Editing rules — follow these on every task
