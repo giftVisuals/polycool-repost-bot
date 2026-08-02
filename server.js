@@ -16,8 +16,11 @@ app.use(express.static(__dirname)); // serves index.html
 
 const DATA_DIR = path.join(__dirname, "data");
 const TMP_DIR = path.join(DATA_DIR, "tmp");
+const PENDING_DIR = path.join(DATA_DIR, "pending");
 const STATE_FILE = path.join(DATA_DIR, "state.json");
 const LOGO_PATH = path.join(__dirname, "assets", "polycool-logo.png");
+
+app.use("/pending", express.static(PENDING_DIR)); // lets <video> tags play queued clips
 
 const ENV = {
   apifyToken: process.env.APIFY_API_TOKEN,
@@ -42,12 +45,14 @@ const ENV = {
 
 // ---------- state + logging ----------
 
-let state = { lastProcessedId: null, lastCheck: null, history: [] };
+let state = { lastProcessedId: null, lastCheck: null, history: [], pending: [] };
 
 async function loadState() {
   await fsp.mkdir(TMP_DIR, { recursive: true });
+  await fsp.mkdir(PENDING_DIR, { recursive: true });
   try {
     state = JSON.parse(await fsp.readFile(STATE_FILE, "utf8"));
+    state.pending = state.pending || [];
   } catch {
     await saveState();
   }
@@ -186,23 +191,28 @@ async function checkForNewContent() {
     let processedCount = 0;
     for (const post of newPosts) {
       const inputPath = path.join(TMP_DIR, `in-${post.id}.mp4`);
-      const outputPath = path.join(TMP_DIR, `out-${post.id}.mp4`);
+      const filename = `${post.id}.mp4`;
+      const outputPath = path.join(PENDING_DIR, filename);
       try {
         log(`New video found: ${post.id}`);
         await downloadFile(post.videoUrl, inputPath);
         await rebrandVideo(inputPath, outputPath);
-        const caption = rebrandCaption(post.caption);
-        const mediaId = await postBridgeUpload(outputPath);
-        await postBridgeCreatePost(mediaId, caption);
 
+        state.pending.push({
+          id: post.id,
+          filename,
+          caption: rebrandCaption(post.caption),
+          originalCaption: post.caption || "",
+          addedAt: new Date().toISOString(),
+        });
         state.lastProcessedId = post.id;
         processedCount++;
-        log(`Posted ${post.id} to Polycool TikTok + YouTube.`);
+        log(`New video ready for review: ${post.id}`);
       } catch (err) {
         log(`Failed on ${post.id}: ${err.message}`);
+        await fsp.rm(outputPath, { force: true });
       } finally {
         await fsp.rm(inputPath, { force: true });
-        await fsp.rm(outputPath, { force: true });
       }
     }
 
@@ -233,6 +243,41 @@ app.post("/api/check-now", async (req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+app.get("/api/pending", (req, res) => {
+  res.json({
+    pending: state.pending.map((p) => ({ ...p, videoUrl: `/pending/${p.filename}` })),
+  });
+});
+
+app.post("/api/pending/:id/approve", async (req, res) => {
+  const item = state.pending.find((p) => p.id === req.params.id);
+  if (!item) return res.status(404).json({ ok: false, error: "Not found" });
+  try {
+    const filePath = path.join(PENDING_DIR, item.filename);
+    const mediaId = await postBridgeUpload(filePath);
+    await postBridgeCreatePost(mediaId, item.caption);
+    state.pending = state.pending.filter((p) => p.id !== item.id);
+    await fsp.rm(filePath, { force: true });
+    log(`Approved & posted ${item.id} to Polycool TikTok + YouTube.`);
+    await saveState();
+    res.json({ ok: true });
+  } catch (err) {
+    log(`Approve failed for ${item.id}: ${err.message}`);
+    await saveState();
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/api/pending/:id/reject", async (req, res) => {
+  const item = state.pending.find((p) => p.id === req.params.id);
+  if (!item) return res.status(404).json({ ok: false, error: "Not found" });
+  state.pending = state.pending.filter((p) => p.id !== item.id);
+  await fsp.rm(path.join(PENDING_DIR, item.filename), { force: true });
+  log(`Rejected ${item.id} — not posted.`);
+  await saveState();
+  res.json({ ok: true });
 });
 
 // ---------- startup ----------

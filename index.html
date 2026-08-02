@@ -76,6 +76,28 @@
   button:hover{opacity:0.85;}
   button:disabled{opacity:0.4;cursor:default;}
 
+  .pending{
+    background:var(--panel);
+    border:1px solid var(--panel-line);
+    border-radius:14px;
+    padding:18px 20px;
+    margin-bottom:20px;
+  }
+  .pending h2{font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin:0 0 14px;font-weight:600;}
+  .pending ul{list-style:none;margin:0;padding:0;}
+  .pending-item{
+    display:flex;gap:14px;
+    padding:14px 0;border-bottom:1px solid var(--panel-line);
+  }
+  .pending-item:last-child{border-bottom:none;}
+  .pending-item video{width:150px;max-width:40%;border-radius:8px;background:#000;flex-shrink:0;}
+  .pending-info{display:flex;flex-direction:column;gap:8px;min-width:0;flex:1;}
+  .pending-info .caption{margin:0;font-size:13px;color:var(--text);line-height:1.4;word-wrap:break-word;}
+  .pending-info .t{font-family:var(--mono);font-size:11px;color:var(--muted);}
+  .pending-actions{display:flex;gap:10px;margin-top:auto;}
+  .pending-actions button.reject{background:transparent;color:var(--red);border:1px solid var(--red);}
+  .pending .empty{color:var(--muted);font-family:var(--sans);font-size:13px;padding:8px 0;}
+
   .log{
     background:var(--panel);
     border:1px solid var(--panel-line);
@@ -114,7 +136,7 @@
     <div class="stages">
       <div class="stage" id="stage-fetch"><div class="node">1</div><label>Fetch<br>Instagram</label></div>
       <div class="stage" id="stage-rebrand"><div class="node">2</div><label>Rebrand<br>video + caption</label></div>
-      <div class="stage" id="stage-upload"><div class="node">3</div><label>Upload to<br>Post Bridge</label></div>
+      <div class="stage" id="stage-upload"><div class="node">3</div><label>Awaiting<br>your review</label></div>
       <div class="stage" id="stage-live"><div class="node">4</div><label>Live on<br>TikTok / YouTube</label></div>
     </div>
     <div class="status-row">
@@ -122,6 +144,11 @@
       <div class="item">Auto-check: <b id="interval">every 20 min</b></div>
       <button id="check-btn">Check now</button>
     </div>
+  </div>
+
+  <div class="pending">
+    <h2>Pending Review</h2>
+    <ul id="pending-list"><li class="empty">Nothing waiting for review.</li></ul>
   </div>
 
   <div class="log">
@@ -137,6 +164,7 @@
   const lastCheckEl = document.getElementById('last-check');
   const intervalEl = document.getElementById('interval');
   const logList = document.getElementById('log-list');
+  const pendingList = document.getElementById('pending-list');
   const stages = ['stage-fetch','stage-rebrand','stage-upload','stage-live'].map(id => document.getElementById(id));
 
   function formatTime(iso){
@@ -145,12 +173,21 @@
     return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
   }
 
+  function escapeHtml(str){
+    const div = document.createElement('div');
+    div.textContent = str || '';
+    return div.innerHTML;
+  }
+
   function pulseStages(){
+    // check-now only fetches + rebrands automatically now — posting waits on manual approval,
+    // so only pulse through the first two stages instead of all the way to "Live".
     let i = 0;
+    const autoStages = stages.slice(0, 2);
     stages.forEach(s => s.classList.remove('active'));
     const step = setInterval(() => {
       stages.forEach(s => s.classList.remove('active'));
-      if(i < stages.length){ stages[i].classList.add('active'); i++; }
+      if(i < autoStages.length){ autoStages[i].classList.add('active'); i++; }
       else { clearInterval(step); stages.forEach(s => s.classList.remove('active')); }
     }, 450);
   }
@@ -177,6 +214,47 @@
     }
   }
 
+  function renderPending(list){
+    if(!list || list.length === 0){
+      pendingList.innerHTML = '<li class="empty">Nothing waiting for review.</li>';
+      return;
+    }
+    pendingList.innerHTML = list.map(p => `
+      <li class="pending-item">
+        <video src="${p.videoUrl}" controls preload="metadata"></video>
+        <div class="pending-info">
+          <p class="caption">${escapeHtml(p.caption)}</p>
+          <span class="t">queued ${formatTime(p.addedAt)}</span>
+          <div class="pending-actions">
+            <button class="approve" data-id="${p.id}" data-action="approve">Approve</button>
+            <button class="reject" data-id="${p.id}" data-action="reject">Reject</button>
+          </div>
+        </div>
+      </li>
+    `).join('');
+  }
+
+  async function refreshPending(){
+    try{
+      const res = await fetch('/api/pending');
+      const data = await res.json();
+      renderPending(data.pending);
+    }catch(e){}
+  }
+
+  pendingList.addEventListener('click', async (e) => {
+    const target = e.target.closest('button[data-action]');
+    if(!target) return;
+    const id = target.dataset.id;
+    const action = target.dataset.action;
+    target.disabled = true;
+    try{
+      await fetch(`/api/pending/${encodeURIComponent(id)}/${action}`, { method:'POST' });
+    }catch(e){}
+    await refreshPending();
+    await refreshStatus();
+  });
+
   async function checkNow(){
     btn.disabled = true;
     badge.textContent = 'CHECKING';
@@ -186,13 +264,16 @@
       await res.json();
     }catch(e){}
     await refreshStatus();
+    await refreshPending();
     badge.textContent = 'IDLE';
     btn.disabled = false;
   }
 
   btn.addEventListener('click', checkNow);
   refreshStatus();
+  refreshPending();
   setInterval(refreshStatus, 15000);
+  setInterval(refreshPending, 15000);
 </script>
 </body>
 </html>
