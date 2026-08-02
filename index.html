@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Polycool Repost Bot</title>
+<style>
+  :root{
+    --bg:#0a0c10;
+    --panel:#12151b;
+    --panel-line:#1f242d;
+    --text:#e7eaee;
+    --muted:#7c8494;
+    --accent:#4fe8c9;
+    --amber:#f5a623;
+    --red:#ef5b5b;
+    --mono: 'JetBrains Mono', 'Courier New', monospace;
+    --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    min-height:100vh;
+    padding:32px 20px 60px;
+  }
+  .wrap{max-width:720px;margin:0 auto;}
+
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:36px;}
+  .brand{display:flex;align-items:center;gap:10px;}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent);}
+  .brand h1{font-size:16px;font-weight:600;letter-spacing:0.02em;margin:0;}
+  .brand span{font-family:var(--mono);font-size:11px;color:var(--muted);}
+  #live-badge{font-family:var(--mono);font-size:11px;color:var(--accent);border:1px solid var(--panel-line);padding:5px 10px;border-radius:20px;}
+
+  .pipeline{
+    background:var(--panel);
+    border:1px solid var(--panel-line);
+    border-radius:14px;
+    padding:28px 20px 22px;
+    margin-bottom:20px;
+  }
+  .stages{display:flex;align-items:flex-start;justify-content:space-between;position:relative;}
+  .stages::before{
+    content:"";
+    position:absolute;
+    top:15px;left:38px;right:38px;height:1px;
+    background:var(--panel-line);
+  }
+  .stage{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:10px;width:25%;}
+  .stage .node{
+    width:30px;height:30px;border-radius:50%;
+    background:var(--bg);border:1px solid var(--panel-line);
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:12px;color:var(--muted);
+    transition:all .3s ease;
+  }
+  .stage.active .node{border-color:var(--accent);color:var(--accent);box-shadow:0 0 14px rgba(79,232,201,0.35);}
+  .stage label{font-size:11px;color:var(--muted);text-align:center;line-height:1.4;}
+
+  .status-row{
+    display:flex;justify-content:space-between;align-items:center;
+    margin-top:26px;padding-top:18px;border-top:1px solid var(--panel-line);
+  }
+  .status-row .item{font-family:var(--mono);font-size:12px;color:var(--muted);}
+  .status-row .item b{color:var(--text);font-weight:500;}
+
+  button{
+    background:var(--accent);color:#04120e;border:none;
+    font-family:var(--sans);font-weight:600;font-size:13px;
+    padding:10px 18px;border-radius:8px;cursor:pointer;
+    transition:opacity .15s ease;
+  }
+  button:hover{opacity:0.85;}
+  button:disabled{opacity:0.4;cursor:default;}
+
+  .log{
+    background:var(--panel);
+    border:1px solid var(--panel-line);
+    border-radius:14px;
+    padding:18px 20px;
+  }
+  .log h2{font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin:0 0 14px;font-weight:600;}
+  .log ul{list-style:none;margin:0;padding:0;max-height:280px;overflow-y:auto;}
+  .log li{
+    font-family:var(--mono);font-size:12px;color:var(--text);
+    padding:9px 0;border-bottom:1px solid var(--panel-line);
+    display:flex;gap:12px;
+  }
+  .log li:last-child{border-bottom:none;}
+  .log li .t{color:var(--muted);white-space:nowrap;}
+  .log .empty{color:var(--muted);font-family:var(--sans);font-size:13px;padding:8px 0;}
+
+  @media (prefers-reduced-motion: reduce){ * { transition:none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="brand">
+      <div class="dot"></div>
+      <div>
+        <h1>Polycool Repost Bot</h1>
+        <span>Polymarket IG &rarr; Polycool TikTok / YouTube</span>
+      </div>
+    </div>
+    <div id="live-badge">IDLE</div>
+  </header>
+
+  <div class="pipeline">
+    <div class="stages">
+      <div class="stage" id="stage-fetch"><div class="node">1</div><label>Fetch<br>Instagram</label></div>
+      <div class="stage" id="stage-rebrand"><div class="node">2</div><label>Rebrand<br>video + caption</label></div>
+      <div class="stage" id="stage-upload"><div class="node">3</div><label>Upload to<br>Post Bridge</label></div>
+      <div class="stage" id="stage-live"><div class="node">4</div><label>Live on<br>TikTok / YouTube</label></div>
+    </div>
+    <div class="status-row">
+      <div class="item">Last check: <b id="last-check">—</b></div>
+      <div class="item">Auto-check: <b id="interval">every 20 min</b></div>
+      <button id="check-btn">Check now</button>
+    </div>
+  </div>
+
+  <div class="log">
+    <h2>Activity</h2>
+    <ul id="log-list"><li class="empty">No activity yet.</li></ul>
+  </div>
+
+</div>
+
+<script>
+  const btn = document.getElementById('check-btn');
+  const badge = document.getElementById('live-badge');
+  const lastCheckEl = document.getElementById('last-check');
+  const intervalEl = document.getElementById('interval');
+  const logList = document.getElementById('log-list');
+  const stages = ['stage-fetch','stage-rebrand','stage-upload','stage-live'].map(id => document.getElementById(id));
+
+  function formatTime(iso){
+    if(!iso) return '—';
+    const d = new Date(iso);
+    return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  }
+
+  function pulseStages(){
+    let i = 0;
+    stages.forEach(s => s.classList.remove('active'));
+    const step = setInterval(() => {
+      stages.forEach(s => s.classList.remove('active'));
+      if(i < stages.length){ stages[i].classList.add('active'); i++; }
+      else { clearInterval(step); stages.forEach(s => s.classList.remove('active')); }
+    }, 450);
+  }
+
+  function renderLog(history){
+    if(!history || history.length === 0){
+      logList.innerHTML = '<li class="empty">No activity yet.</li>';
+      return;
+    }
+    logList.innerHTML = history.map(h =>
+      `<li><span class="t">${formatTime(h.time)}</span><span>${h.message}</span></li>`
+    ).join('');
+  }
+
+  async function refreshStatus(){
+    try{
+      const res = await fetch('/api/status');
+      const data = await res.json();
+      lastCheckEl.textContent = formatTime(data.lastCheck);
+      intervalEl.textContent = `every ${data.intervalMinutes} min`;
+      renderLog(data.history);
+    }catch(e){
+      badge.textContent = 'OFFLINE';
+    }
+  }
+
+  async function checkNow(){
+    btn.disabled = true;
+    badge.textContent = 'CHECKING';
+    pulseStages();
+    try{
+      const res = await fetch('/api/check-now', { method:'POST' });
+      await res.json();
+    }catch(e){}
+    await refreshStatus();
+    badge.textContent = 'IDLE';
+    btn.disabled = false;
+  }
+
+  btn.addEventListener('click', checkNow);
+  refreshStatus();
+  setInterval(refreshStatus, 15000);
+</script>
+</body>
+</html>
+
