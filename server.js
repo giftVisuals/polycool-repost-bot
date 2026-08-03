@@ -91,19 +91,24 @@ async function fetchLatestInstagramPosts() {
   });
   if (!res.ok) throw new Error(`Apify request failed: ${res.status}`);
   const posts = await res.json();
-  // NOTE: verify these field names against your actual Apify dataset output
-  // (Apify actors occasionally rename fields) — check one run in the Apify console.
-  const carouselCount = posts.filter((p) => p.videoUrl && isCarousel(p)).length;
-  if (carouselCount > 0) log(`Skipped ${carouselCount} carousel post(s) — only single-video posts (Reels/Shorts) are processed.`);
 
-  return posts
-    .filter((p) => p.videoUrl && !isCarousel(p))
-    .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  // Diagnostic: Apify actors occasionally rename/rearrange fields between versions —
+  // this makes the actual type/productType values visible in the dashboard's Activity
+  // log so field-matching problems below can be fixed against real data, not guesses.
+  const summary = posts.map((p) => `${String(p.id).slice(-6)}:type=${p.type}/pt=${p.productType}`).join(", ");
+  log(`Fetched ${posts.length} post(s) — ${summary}`);
+
+  // Reels/Shorts are marked productType "clips" by Apify's Instagram scraper — that's
+  // the documented signal, more reliable than guessing at carousel-specific fields.
+  const isReel = (p) => (p.productType ? p.productType === "clips" : p.videoUrl && !isCarousel(p));
+  const skipped = posts.filter((p) => !isReel(p)).length;
+  if (skipped > 0) log(`Skipped ${skipped} non-Reel post(s) — only Reels/Shorts are processed.`);
+
+  return posts.filter(isReel).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 }
 
-// Carousels ("Sidecar" posts) have multiple slides — the Apify Instagram scraper marks
-// them with type "Sidecar" and/or a non-empty childPosts array. Skip those entirely,
-// we only want single-video Reels/Shorts.
+// Fallback only used if this actor's response has no productType field at all.
+// Carousels ("Sidecar" posts) have multiple slides.
 function isCarousel(post) {
   return post.type === "Sidecar" || (Array.isArray(post.childPosts) && post.childPosts.length > 0);
 }
@@ -395,6 +400,17 @@ app.get("/api/raw/:id/meta", async (req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+app.post("/api/raw/:id/discard", async (req, res) => {
+  const item = state.raw.find((r) => r.id === req.params.id);
+  if (!item) return res.status(404).json({ ok: false, error: "Not found" });
+  state.raw = state.raw.filter((r) => r.id !== item.id);
+  await fsp.rm(path.join(RAW_DIR, item.filename), { force: true });
+  await fsp.rm(path.join(RAW_DIR, `${item.id}.jpg`), { force: true });
+  log(`Discarded ${item.id} from Needs Setup — not posted.`);
+  await saveState();
+  res.json({ ok: true });
 });
 
 app.post("/api/raw/:id/rebrand", async (req, res) => {

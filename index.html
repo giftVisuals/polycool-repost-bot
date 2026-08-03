@@ -108,7 +108,8 @@
     flex:1;min-width:160px;background:var(--bg);border:1px solid var(--panel-line);color:var(--text);
     border-radius:6px;padding:8px 10px;font-size:13px;
   }
-  .raw-actions{margin-top:14px;}
+  .raw-actions{display:flex;gap:10px;margin-top:14px;}
+  .raw-actions .discard-btn{background:transparent;color:var(--red);border:1px solid var(--red);}
 
   .pending{
     background:var(--panel);
@@ -348,6 +349,7 @@
         </div>
         <div class="raw-actions">
           <button class="rebrand-btn" data-id="${r.id}">Rebrand &amp; queue for review</button>
+          <button class="discard-btn" data-id="${r.id}">Discard</button>
         </div>
       </li>
     `).join('');
@@ -427,6 +429,16 @@
   }
 
   rawList.addEventListener('click', async (e) => {
+    const discardBtn = e.target.closest('.discard-btn');
+    if(discardBtn){
+      discardBtn.disabled = true;
+      try{
+        await fetch(`/api/raw/${encodeURIComponent(discardBtn.dataset.id)}/discard`, { method:'POST' });
+      }catch(e){}
+      await refreshRaw();
+      return;
+    }
+
     const btn = e.target.closest('.rebrand-btn');
     if(!btn) return;
     const item = btn.closest('.raw-item');
