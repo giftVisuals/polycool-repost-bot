@@ -92,6 +92,8 @@
   .raw-item .caption{margin:0 0 10px;font-size:13px;color:var(--text);line-height:1.4;word-wrap:break-word;}
   .raw-preview{display:block;max-width:100%;max-height:280px;border-radius:8px;background:#000;margin-bottom:8px;}
   .raw-item .hint{margin:0 0 10px;}
+  .detect-ok{margin:0 0 10px;font-size:12px;color:var(--accent);}
+  .detect-none{margin:0 0 10px;font-size:12px;color:var(--amber);}
   .frame-wrap{position:relative;display:inline-block;max-width:100%;touch-action:none;cursor:crosshair;border-radius:8px;overflow:hidden;}
   .frame-wrap img{display:block;max-width:100%;height:auto;user-select:none;-webkit-user-drag:none;}
   .drag-box{
@@ -337,33 +339,39 @@
       rawList.innerHTML = '<li class="empty">Nothing waiting for setup.</li>';
       return;
     }
-    rawList.innerHTML = list.map(r => `
-      <li class="raw-item" data-id="${r.id}">
+    rawList.innerHTML = list.map(r => {
+      const found = r.suggestion && r.suggestion.found;
+      const initialBox = found ? r.suggestion.logoBox : defaultBox;
+      const suggestionAttr = escapeHtml(JSON.stringify(r.suggestion || { found: false }));
+      return `
+      <li class="raw-item" data-id="${r.id}" data-suggestion="${suggestionAttr}">
         <p class="caption">${escapeHtml(r.caption)}</p>
         <video src="${r.videoUrl}" controls preload="metadata" class="raw-preview"></video>
         <p class="hint">Watch the clip above to see where/if branding appears, then drag the box on the frame below to match.</p>
+        <p class="${found ? 'detect-ok' : 'detect-none'}">${found ? '✓ Auto-detected "Polymarket" text — adjust if needed' : '⚠ Could not auto-detect text — drag the box manually'}</p>
         <div class="frame-wrap">
           <img src="${r.frameUrl}" draggable="false" alt="video frame">
           <div class="drag-box"></div>
         </div>
         <div class="box-fields">
-          <label>X <input type="number" class="box-x" value="${defaultBox.x}"></label>
-          <label>Y <input type="number" class="box-y" value="${defaultBox.y}"></label>
-          <label>W <input type="number" class="box-w" value="${defaultBox.w}"></label>
-          <label>H <input type="number" class="box-h" value="${defaultBox.h}"></label>
+          <label>X <input type="number" class="box-x" value="${initialBox.x}"></label>
+          <label>Y <input type="number" class="box-y" value="${initialBox.y}"></label>
+          <label>W <input type="number" class="box-w" value="${initialBox.w}"></label>
+          <label>H <input type="number" class="box-h" value="${initialBox.h}"></label>
         </div>
         <div class="mode-row">
           <label><input type="radio" name="mode-${r.id}" class="mode-logo" value="logo" checked> Logo</label>
           <label><input type="radio" name="mode-${r.id}" class="mode-text" value="text"> Custom text</label>
           <label><input type="radio" name="mode-${r.id}" class="mode-none" value="none"> No branding to cover</label>
-          <input type="text" class="text-input" placeholder="Polycool" style="display:none">
+          <input type="text" class="text-input" placeholder="Polycool" value="${found ? 'Polycool' : ''}" style="display:none">
         </div>
         <div class="raw-actions">
           <button class="rebrand-btn" data-id="${r.id}">Rebrand &amp; queue for review</button>
           <button class="discard-btn" data-id="${r.id}">Discard</button>
         </div>
       </li>
-    `).join('');
+    `;
+    }).join('');
 
     rawList.querySelectorAll('.raw-item').forEach(item => attachBoxEditor(item));
   }
@@ -392,8 +400,24 @@
     }
 
     [xInput, yInput, wInput, hInput].forEach(input => input.addEventListener('input', drawFromInputs));
-    modeText.addEventListener('change', () => { textInput.style.display = modeText.checked ? 'block' : 'none'; });
-    modeLogo.addEventListener('change', () => { textInput.style.display = modeText.checked ? 'block' : 'none'; });
+
+    let suggestion = { found: false };
+    try{ suggestion = JSON.parse(item.dataset.suggestion || '{}'); }catch(e){}
+
+    function applySuggestedBox(box){
+      if(!box) return;
+      xInput.value = box.x; yInput.value = box.y; wInput.value = box.w; hInput.value = box.h;
+      drawFromInputs();
+    }
+
+    modeText.addEventListener('change', () => {
+      textInput.style.display = modeText.checked ? 'block' : 'none';
+      if(modeText.checked && suggestion.found) applySuggestedBox(suggestion.textBox);
+    });
+    modeLogo.addEventListener('change', () => {
+      textInput.style.display = modeText.checked ? 'block' : 'none';
+      if(modeLogo.checked && suggestion.found) applySuggestedBox(suggestion.logoBox);
+    });
 
     if(img.complete && img.naturalWidth) drawFromInputs();
     img.addEventListener('load', drawFromInputs);

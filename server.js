@@ -11,6 +11,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
+const Tesseract = require("tesseract.js");
 
 const app = express();
 app.use(express.json());
@@ -23,6 +24,7 @@ const STATE_FILE = path.join(DATA_DIR, "state.json");
 const LOGO_PATH_DARK = path.join(__dirname, "assets", "polycool-logo.png");
 const LOGO_PATH_LIGHT = path.join(__dirname, "assets", "polycool-logo-light.png");
 const FONT_DIR = path.join(__dirname, "assets", "fonts");
+const OCR_LANG_PATH = path.join(__dirname, "node_modules", "@tesseract.js-data", "eng", "4.0.0_best_int");
 
 app.use("/pending", express.static(PENDING_DIR)); // lets <video> tags play queued clips
 app.use("/raw", express.static(RAW_DIR)); // serves raw clips + their frame previews for the box editor
@@ -149,6 +151,62 @@ function extractFirstFrame(inputPath, outputPath) {
       err ? reject(err) : resolve(outputPath)
     );
   });
+}
+
+// ---------- step 2c-2: OCR the frame to suggest where "Polymarket" actually is ----------
+// Dragging a box by eye is the most annoying part of this workflow. Since the branding
+// almost always includes the word "Polymarket" as text, OCR can usually find its exact
+// pixel position automatically — the box editor still lets you drag/adjust if it's wrong
+// or missing, this is just a starting point instead of starting from nothing.
+
+let ocrWorkerPromise = null;
+function getOcrWorker() {
+  if (!ocrWorkerPromise) {
+    ocrWorkerPromise = Tesseract.createWorker("eng", 1, {
+      langPath: OCR_LANG_PATH,
+      cachePath: path.join(DATA_DIR, "ocr-cache"),
+    });
+  }
+  return ocrWorkerPromise;
+}
+
+function looksLikePolymarket(text) {
+  const t = text.toLowerCase().replace(/[^a-z]/g, "");
+  return t.includes("polymarket") || t.includes("polymark") || (t.startsWith("poly") && t.length >= 6);
+}
+
+async function suggestTextBox(framePath) {
+  try {
+    const worker = await getOcrWorker();
+    const result = await worker.recognize(framePath, {}, { text: true, blocks: true });
+    const words = [];
+    for (const block of result.data.blocks || []) {
+      for (const para of block.paragraphs || []) {
+        for (const line of para.lines || []) {
+          for (const word of line.words || []) words.push(word);
+        }
+      }
+    }
+    const match = words.find((w) => looksLikePolymarket(w.text));
+    if (!match) return { found: false };
+
+    const { x0, y0, x1, y1 } = match.bbox;
+    const textBox = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    // Logo mode also needs to cover an icon that usually sits just left of the word —
+    // pad generously so a first drag isn't required, only fine-tuning.
+    const pad = Math.round(textBox.h * 0.3);
+    const iconWidth = Math.round(textBox.h * 1.4);
+    const logoBox = {
+      x: Math.max(0, textBox.x - iconWidth - pad),
+      y: Math.max(0, textBox.y - pad),
+      w: textBox.w + iconWidth + pad * 2,
+      h: textBox.h + pad * 2,
+    };
+    return { found: true, textBox, logoBox };
+  } catch (err) {
+    log(`OCR suggestion failed: ${err.message}`);
+    return { found: false };
+  }
 }
 
 // ---------- step 2d: detect whether a given box region is light or dark themed ----------
@@ -316,6 +374,7 @@ async function queueRawVideo(post) {
     log(`New video found: ${post.id}`);
     await downloadFile(post.videoUrl, videoPath);
     await extractFirstFrame(videoPath, framePath);
+    const suggestion = await suggestTextBox(framePath);
 
     state.raw.push({
       id: post.id,
@@ -323,8 +382,13 @@ async function queueRawVideo(post) {
       caption: rebrandCaption(post.caption),
       originalCaption: post.caption || "",
       addedAt: new Date().toISOString(),
+      suggestion,
     });
-    log(`New video ready for setup: ${post.id}`);
+    log(
+      suggestion.found
+        ? `New video ready for setup: ${post.id} (auto-detected "Polymarket" text)`
+        : `New video ready for setup: ${post.id} (couldn't auto-detect text — drag manually)`
+    );
     return true;
   } catch (err) {
     log(`Failed on ${post.id}: ${err.message}`);
