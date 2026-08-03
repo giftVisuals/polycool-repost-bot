@@ -391,8 +391,10 @@
     if(img.complete && img.naturalWidth) drawFromInputs();
     img.addEventListener('load', drawFromInputs);
 
-    function toNatural(clientX, clientY){
-      const rect = img.getBoundingClientRect();
+    // The image's on-screen rect is captured once per gesture (at pointerdown) and
+    // reused for every move — recomputing it on each pointermove let a mid-drag page
+    // scroll shift the rect, producing a corrupted (e.g. zero-width) box.
+    function toNatural(clientX, clientY, rect){
       const scaleX = img.naturalWidth / rect.width;
       const scaleY = img.naturalHeight / rect.height;
       return {
@@ -402,20 +404,22 @@
     }
 
     let start = null;
+    let gestureRect = null;
     const frameWrap = item.querySelector('.frame-wrap');
     frameWrap.addEventListener('pointerdown', (e) => {
       frameWrap.setPointerCapture(e.pointerId);
-      start = toNatural(e.clientX, e.clientY);
+      gestureRect = img.getBoundingClientRect();
+      start = toNatural(e.clientX, e.clientY, gestureRect);
     });
     frameWrap.addEventListener('pointermove', (e) => {
       if(!start) return;
-      const cur = toNatural(e.clientX, e.clientY);
+      const cur = toNatural(e.clientX, e.clientY, gestureRect);
       const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y);
       const w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
       xInput.value = x; yInput.value = y; wInput.value = w; hInput.value = h;
       drawFromInputs();
     });
-    frameWrap.addEventListener('pointerup', () => { start = null; });
+    frameWrap.addEventListener('pointerup', () => { start = null; gestureRect = null; });
   }
 
   let lastRawIds = '';
@@ -451,6 +455,15 @@
       : item.querySelector('.mode-none').checked ? 'none'
       : 'logo';
     const text = item.querySelector('.text-input').value;
+
+    if(mode !== 'none'){
+      const w = Number(item.querySelector('.box-w').value);
+      const h = Number(item.querySelector('.box-h').value);
+      if(!w || !h){
+        alert('Drag a box over the branding first — the current box has zero width or height.');
+        return;
+      }
+    }
     const payload = {
       x: item.querySelector('.box-x').value,
       y: item.querySelector('.box-y').value,

@@ -301,7 +301,16 @@ async function postBridgeCreatePost(mediaId, caption) {
 
 // ---------- the full pipeline ----------
 
+// Guards against overlapping runs — e.g. auto-check firing at the same moment as a
+// manual "Check now" click — which previously could queue the same post twice.
+let checkInProgress = false;
+
 async function checkForNewContent() {
+  if (checkInProgress) {
+    log("Check already in progress, skipped.");
+    return { processed: 0, skipped: true };
+  }
+  checkInProgress = true;
   state.lastCheck = new Date().toISOString();
   try {
     const posts = await fetchLatestInstagramPosts();
@@ -320,6 +329,10 @@ async function checkForNewContent() {
 
     let processedCount = 0;
     for (const post of newPosts) {
+      const alreadyQueued =
+        state.raw.some((r) => r.id === post.id) || state.pending.some((p) => p.id === post.id);
+      if (alreadyQueued) continue;
+
       const filename = `${post.id}.mp4`;
       const videoPath = path.join(RAW_DIR, filename);
       const framePath = path.join(RAW_DIR, `${post.id}.jpg`);
@@ -351,6 +364,8 @@ async function checkForNewContent() {
     log(`Check failed: ${err.message}`);
     await saveState();
     throw err;
+  } finally {
+    checkInProgress = false;
   }
 }
 
