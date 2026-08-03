@@ -95,6 +95,7 @@
   .pending-info .caption{margin:0;font-size:13px;color:var(--text);line-height:1.4;word-wrap:break-word;}
   .pending-info .warning{margin:0;font-size:12px;color:var(--amber);line-height:1.4;background:rgba(245,166,35,0.1);border:1px solid rgba(245,166,35,0.3);border-radius:6px;padding:6px 8px;}
   .pending-info .t{font-family:var(--mono);font-size:11px;color:var(--muted);}
+  .theme-tag{font-family:var(--mono);font-size:10px;color:var(--muted);border:1px solid var(--panel-line);border-radius:20px;padding:2px 8px;display:inline-block;width:fit-content;text-transform:uppercase;letter-spacing:0.04em;}
   .pending-actions{display:flex;gap:10px;margin-top:auto;}
   .pending-actions button.reject{background:transparent;color:var(--red);border:1px solid var(--red);}
   .pending .empty{color:var(--muted);font-family:var(--sans);font-size:13px;padding:8px 0;}
@@ -225,6 +226,7 @@
         <video src="${p.videoUrl}" controls preload="metadata"></video>
         <div class="pending-info">
           <p class="caption">${escapeHtml(p.caption)}</p>
+          ${p.theme ? `<span class="theme-tag">${escapeHtml(p.theme)} card detected</span>` : ''}
           ${p.sizeWarning ? `<p class="warning">⚠ ${escapeHtml(p.sizeWarning)}</p>` : ''}
           <span class="t">queued ${formatTime(p.addedAt)}</span>
           <div class="pending-actions">

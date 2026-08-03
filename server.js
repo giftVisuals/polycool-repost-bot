@@ -18,7 +18,8 @@ const DATA_DIR = path.join(__dirname, "data");
 const TMP_DIR = path.join(DATA_DIR, "tmp");
 const PENDING_DIR = path.join(DATA_DIR, "pending");
 const STATE_FILE = path.join(DATA_DIR, "state.json");
-const LOGO_PATH = path.join(__dirname, "assets", "polycool-logo.png");
+const LOGO_PATH_DARK = path.join(__dirname, "assets", "polycool-logo.png");
+const LOGO_PATH_LIGHT = path.join(__dirname, "assets", "polycool-logo-light.png");
 
 app.use("/pending", express.static(PENDING_DIR)); // lets <video> tags play queued clips
 
@@ -116,17 +117,38 @@ function getVideoDimensions(filePath) {
   });
 }
 
+// ---------- step 2c: detect whether the burned-in card is light or dark themed ----------
+// Polymarket's posts use a white card with dark text sometimes, and a black card with
+// light text other times. Sample the average brightness of the cover-box region on the
+// first frame to pick the matching cover color + logo variant automatically.
+
+function detectCardTheme(inputPath) {
+  return new Promise((resolve) => {
+    const { x, y, w, h } = ENV.logoCover;
+    const filter = `crop=${w}:${h}:${x}:${y},signalstats,metadata=print:key=lavfi.signalstats.YAVG`;
+    execFile(ffmpegPath, ["-i", inputPath, "-vf", filter, "-vframes", "1", "-f", "null", "-"], (err, stdout, stderr) => {
+      const match = /lavfi\.signalstats\.YAVG=([\d.]+)/.exec(stderr || "");
+      // Default to "dark" (the original assumption) if we can't read a frame at all.
+      if (!match) return resolve("dark");
+      resolve(parseFloat(match[1]) > 128 ? "light" : "dark");
+    });
+  });
+}
+
 // ---------- step 3: cover old logo + overlay Polycool logo ----------
 
-function rebrandVideo(inputPath, outputPath) {
+function rebrandVideo(inputPath, outputPath, theme) {
   return new Promise((resolve, reject) => {
     const { x, y, w, h } = ENV.logoCover;
+    const isLight = theme === "light";
+    const coverColor = isLight ? "white" : "black";
+    const logoPath = isLight ? LOGO_PATH_LIGHT : LOGO_PATH_DARK;
     const filter =
-      `[0:v]drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=black:t=fill[bg];` +
+      `[0:v]drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=${coverColor}:t=fill[bg];` +
       `[bg][1:v]overlay=x=${ENV.logoOverlay.x}:y=${ENV.logoOverlay.y}`;
     const args = [
       "-i", inputPath,
-      "-i", LOGO_PATH,
+      "-i", logoPath,
       "-filter_complex", filter,
       "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
       "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart",
@@ -222,7 +244,9 @@ async function checkForNewContent() {
           }
         }
 
-        await rebrandVideo(inputPath, outputPath);
+        const theme = await detectCardTheme(inputPath);
+        log(`Detected ${theme} card theme for ${post.id}.`);
+        await rebrandVideo(inputPath, outputPath, theme);
 
         state.pending.push({
           id: post.id,
@@ -230,6 +254,7 @@ async function checkForNewContent() {
           caption: rebrandCaption(post.caption),
           originalCaption: post.caption || "",
           addedAt: new Date().toISOString(),
+          theme,
           sizeWarning,
         });
         state.lastProcessedId = post.id;
