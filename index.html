@@ -186,6 +186,13 @@
   </div>
 
   <div class="raw">
+    <h2>Test with specific Reel URLs</h2>
+    <p class="hint">Paste Instagram Reel links (one per line) to pull them straight into Needs Setup, skipping the date filter — for testing only.</p>
+    <textarea id="test-urls" rows="3" placeholder="https://www.instagram.com/reel/..." style="width:100%;background:var(--bg);border:1px solid var(--panel-line);color:var(--text);border-radius:8px;padding:8px 10px;font-family:var(--mono);font-size:12px;margin-bottom:10px;"></textarea>
+    <button id="test-fetch-btn">Fetch for testing</button>
+  </div>
+
+  <div class="raw">
     <h2>Needs Setup</h2>
     <p class="hint">Drag a box over the branding on the frame below, choose Logo or Custom text, then rebrand it.</p>
     <ul id="raw-list"><li class="empty">Nothing waiting for setup.</li></ul>
@@ -510,6 +517,33 @@
   }
 
   btn.addEventListener('click', checkNow);
+
+  const testUrlsInput = document.getElementById('test-urls');
+  const testFetchBtn = document.getElementById('test-fetch-btn');
+  testFetchBtn.addEventListener('click', async () => {
+    const urls = testUrlsInput.value.split('\n').map(s => s.trim()).filter(Boolean);
+    if(urls.length === 0){ alert('Paste at least one Reel URL first.'); return; }
+    testFetchBtn.disabled = true;
+    try{
+      const res = await fetch('/api/test-fetch', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ urls }),
+      });
+      const data = await res.json();
+      if(!data.ok){
+        alert(data.error || 'That didn\'t work.');
+      } else {
+        testUrlsInput.value = '';
+      }
+    }catch(e){
+      alert('Network error, please try again.');
+    }
+    testFetchBtn.disabled = false;
+    await refreshRaw();
+    await refreshStatus();
+  });
+
   refreshStatus();
   refreshRaw();
   refreshPending();

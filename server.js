@@ -79,14 +79,18 @@ function log(message) {
 // ---------- step 1: find new videos on Instagram (via Apify) ----------
 
 async function fetchLatestInstagramPosts() {
+  return fetchInstagramPosts([ENV.igUrl], 5);
+}
+
+async function fetchInstagramPosts(directUrls, resultsLimit) {
   const url = `https://api.apify.com/v2/acts/${ENV.apifyActor}/run-sync-get-dataset-items?token=${ENV.apifyToken}`;
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      directUrls: [ENV.igUrl],
+      directUrls,
       resultsType: "posts",
-      resultsLimit: 5,
+      resultsLimit,
     }),
   });
   if (!res.ok) throw new Error(`Apify request failed: ${res.status}`);
@@ -299,6 +303,37 @@ async function postBridgeCreatePost(mediaId, caption) {
   return res.json();
 }
 
+// Downloads one post's video + first frame into the raw/Needs Setup queue.
+// Returns true if it was added, false if skipped (already queued, or download failed).
+async function queueRawVideo(post) {
+  const alreadyQueued = state.raw.some((r) => r.id === post.id) || state.pending.some((p) => p.id === post.id);
+  if (alreadyQueued) return false;
+
+  const filename = `${post.id}.mp4`;
+  const videoPath = path.join(RAW_DIR, filename);
+  const framePath = path.join(RAW_DIR, `${post.id}.jpg`);
+  try {
+    log(`New video found: ${post.id}`);
+    await downloadFile(post.videoUrl, videoPath);
+    await extractFirstFrame(videoPath, framePath);
+
+    state.raw.push({
+      id: post.id,
+      filename,
+      caption: rebrandCaption(post.caption),
+      originalCaption: post.caption || "",
+      addedAt: new Date().toISOString(),
+    });
+    log(`New video ready for setup: ${post.id}`);
+    return true;
+  } catch (err) {
+    log(`Failed on ${post.id}: ${err.message}`);
+    await fsp.rm(videoPath, { force: true });
+    await fsp.rm(framePath, { force: true });
+    return false;
+  }
+}
+
 // ---------- the full pipeline ----------
 
 // Guards against overlapping runs — e.g. auto-check firing at the same moment as a
@@ -329,32 +364,10 @@ async function checkForNewContent() {
 
     let processedCount = 0;
     for (const post of newPosts) {
-      const alreadyQueued =
-        state.raw.some((r) => r.id === post.id) || state.pending.some((p) => p.id === post.id);
-      if (alreadyQueued) continue;
-
-      const filename = `${post.id}.mp4`;
-      const videoPath = path.join(RAW_DIR, filename);
-      const framePath = path.join(RAW_DIR, `${post.id}.jpg`);
-      try {
-        log(`New video found: ${post.id}`);
-        await downloadFile(post.videoUrl, videoPath);
-        await extractFirstFrame(videoPath, framePath);
-
-        state.raw.push({
-          id: post.id,
-          filename,
-          caption: rebrandCaption(post.caption),
-          originalCaption: post.caption || "",
-          addedAt: new Date().toISOString(),
-        });
+      const added = await queueRawVideo(post);
+      if (added) {
         state.lastProcessedId = post.id;
         processedCount++;
-        log(`New video ready for setup: ${post.id}`);
-      } catch (err) {
-        log(`Failed on ${post.id}: ${err.message}`);
-        await fsp.rm(videoPath, { force: true });
-        await fsp.rm(framePath, { force: true });
       }
     }
 
@@ -385,6 +398,27 @@ app.post("/api/check-now", async (req, res) => {
     const result = await checkForNewContent();
     res.json({ ok: true, ...result });
   } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Manually pull specific Instagram Reel URLs into Needs Setup, for testing —
+// bypasses the profile URL, the date cutoff, and the last-processed-id dedup.
+app.post("/api/test-fetch", async (req, res) => {
+  const urls = (req.body && req.body.urls) || [];
+  if (!Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ ok: false, error: "Provide at least one Instagram Reel URL." });
+  }
+  try {
+    const posts = await fetchInstagramPosts(urls, urls.length);
+    let added = 0;
+    for (const post of posts) {
+      if (await queueRawVideo(post)) added++;
+    }
+    await saveState();
+    res.json({ ok: true, added, found: posts.length });
+  } catch (err) {
+    log(`Test fetch failed: ${err.message}`);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
