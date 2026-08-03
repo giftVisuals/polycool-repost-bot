@@ -40,6 +40,8 @@ const ENV = {
     x: process.env.LOGO_OVERLAY_X || "20",
     y: process.env.LOGO_OVERLAY_Y || "20",
   },
+  expectedVideoWidth: process.env.EXPECTED_VIDEO_WIDTH ? parseInt(process.env.EXPECTED_VIDEO_WIDTH, 10) : null,
+  expectedVideoHeight: process.env.EXPECTED_VIDEO_HEIGHT ? parseInt(process.env.EXPECTED_VIDEO_HEIGHT, 10) : null,
   port: process.env.PORT || 3000,
 };
 
@@ -98,6 +100,20 @@ async function downloadFile(url, destPath) {
   const buffer = Buffer.from(await res.arrayBuffer());
   await fsp.writeFile(destPath, buffer);
   return destPath;
+}
+
+// ---------- step 2b: read the downloaded video's actual dimensions ----------
+
+function getVideoDimensions(filePath) {
+  return new Promise((resolve, reject) => {
+    // ffmpeg exits non-zero when given no output file — that's expected, we just want
+    // the "Video: ... WxH" line it prints to stderr while probing the input.
+    execFile(ffmpegPath, ["-i", filePath], (err, stdout, stderr) => {
+      const match = /Video:.*?(\d{2,5})x(\d{2,5})/.exec(stderr || "");
+      if (!match) return reject(new Error("Could not read video dimensions"));
+      resolve({ width: parseInt(match[1], 10), height: parseInt(match[2], 10) });
+    });
+  });
 }
 
 // ---------- step 3: cover old logo + overlay Polycool logo ----------
@@ -196,6 +212,16 @@ async function checkForNewContent() {
       try {
         log(`New video found: ${post.id}`);
         await downloadFile(post.videoUrl, inputPath);
+
+        let sizeWarning = null;
+        if (ENV.expectedVideoWidth && ENV.expectedVideoHeight) {
+          const { width, height } = await getVideoDimensions(inputPath);
+          if (width !== ENV.expectedVideoWidth || height !== ENV.expectedVideoHeight) {
+            sizeWarning = `Video is ${width}x${height}, expected ${ENV.expectedVideoWidth}x${ENV.expectedVideoHeight} — logo cover box may be misaligned, check closely before approving.`;
+            log(`Size mismatch on ${post.id}: ${sizeWarning}`);
+          }
+        }
+
         await rebrandVideo(inputPath, outputPath);
 
         state.pending.push({
@@ -204,6 +230,7 @@ async function checkForNewContent() {
           caption: rebrandCaption(post.caption),
           originalCaption: post.caption || "",
           addedAt: new Date().toISOString(),
+          sizeWarning,
         });
         state.lastProcessedId = post.id;
         processedCount++;
