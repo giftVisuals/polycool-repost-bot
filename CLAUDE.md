@@ -13,7 +13,7 @@ Client context: the developer (Glory) has been hired by both Polymarket and Poly
 
 Rebranding means two separate things — don't solve only one:
 1. **Caption text** — replace "Polymarket" with "Polycool" (case-insensitive) in the post caption.
-2. **On-video branding** — the source videos have a "Polymarket" / "Polymarket Sports" logo burned into the top-left corner of the video itself for its full duration. This needs to be covered and replaced with Polycool's logo in the actual video file, not just the caption.
+2. **On-video branding** — Polymarket burns branding into the video itself, but the layout is not fixed: seen so far are a top-left corner bug, a tweet-style card (icon + handle + checkmark), and a lower-third "trending headline" card, in both light and dark themes. Because the layout keeps changing, this is handled per-video by a human via the dashboard's box editor (see "Current status"), not by fixed coordinates.
 
 ## Stack
 
@@ -26,13 +26,17 @@ Rebranding means two separate things — don't solve only one:
 ## File structure
 
 ```
-server.js           - entire backend: fetch → rebrand video → rebrand caption → upload → post, plus Express routes
-index.html           - single-page status dashboard (vanilla JS, polls /api/status every 15s)
+server.js                        - backend: fetch → download → (human box-edits) → upload → post, plus Express routes
+index.html                       - dashboard: Needs Setup (box editor) → Pending Review (approve/reject) → Activity log
 package.json
-.env.example         - template listing every required env var — REAL VALUES GO IN RAILWAY, NEVER IN A COMMITTED FILE
-.gitignore            - excludes node_modules/, .env, data/, *.mp4, *.log
-assets/polycool-logo.png  - REQUIRED, not yet added — see Next Steps
-data/state.json      - runtime state (last processed post ID, activity log) — gitignored, resets on Railway restart unless a Volume is attached
+.env.example                     - template listing every required env var — REAL VALUES GO IN RAILWAY, NEVER IN A COMMITTED FILE
+.gitignore                       - excludes node_modules/, .env, data/, *.mp4, *.log
+assets/polycool-logo.png         - dark-theme Polycool logo (transparent PNG)
+assets/polycool-logo-light.png   - light-theme variant (recolored from the dark one — swap for a pro design later)
+assets/fonts/DejaVuSans-Bold.ttf - bundled font for "Custom text" mode (ffmpeg-static has no drawtext filter; text uses the "ass"/libass filter instead)
+data/raw/          - downloaded videos awaiting a human to draw the cover box (+ first-frame .jpg previews)
+data/pending/      - rebranded videos awaiting approve/reject
+data/state.json    - runtime state (raw queue, pending queue, activity log) — gitignored, resets on Railway restart unless a Volume is attached (see Next Steps)
 ```
 
 ## Environment variables (see `.env.example` for the full template)
@@ -46,21 +50,20 @@ data/state.json      - runtime state (last processed post ID, activity log) — 
 | `POST_BRIDGE_TIKTOK_ACCOUNT_ID` | Polycool's TikTok account ID inside Post Bridge |
 | `POST_BRIDGE_YOUTUBE_ACCOUNT_ID` | Polycool's YouTube account ID inside Post Bridge |
 | `CHECK_INTERVAL_MINUTES` | How often the cron job checks for new videos |
-| `LOGO_COVER_X/Y/W/H` | Pixel box that covers the old Polymarket logo |
-| `LOGO_OVERLAY_X/Y` | Where the new Polycool logo PNG gets placed |
+| `PROCESS_SINCE_DATE` | Never process/post anything from before this date, no matter what Apify returns (default `2026-08-03`) |
+| `APPROVAL_PASSWORD` | Required to Approve/Reject in the dashboard — fails closed if unset |
+| `LOGO_COVER_X/Y/W/H` | Just a starting box prefill for the dashboard's box editor, not enforced — the real box is drawn per video |
 | `PORT` | Railway sets this automatically |
 
 ---
 
 ## ⚠️ SECURITY — read this before touching git
 
-A `.env` file containing real credentials was committed to this repo (commit `897d370`) and pushed to GitHub. **As of 2026-08-02: `.env` has been removed from git tracking** (`git rm --cached`, committed on `claude/claude-md-review-1rh83m`), but it still exists in that old commit's history, and **the exposed Apify token and Post Bridge API key have NOT been confirmed rotated yet** — treat them as compromised until the developer regenerates both and confirms.
+**Resolved.** A `.env` file was committed to this repo (commit `897d370`) and pushed to GitHub — but on inspection its values were unfilled placeholder text (`your_apify_token_here`, etc.), not real credentials, so nothing was actually exposed. `.env` has been fully removed from git tracking on both the feature branch and `main`; `.env.example` is the template now.
 
-Before any other work in this repo:
-1. Confirm `.env` is **not tracked** (`git ls-files | grep .env` should return nothing but `.env.example`) — currently true as of the last check.
-2. Confirm the developer has rotated/regenerated the Post Bridge API key and Apify token that were exposed. **Still unconfirmed** — ask the developer directly before assuming it's safe.
-3. Never re-add `.env`, or any file containing real keys, to a commit — check `.gitignore` covers it before every commit that touches env-related files. Real key values go only into Railway's environment variable settings at deploy time, never into a committed file.
-4. Never print, log, or echo full key values back in chat, commit messages, or code comments.
+Rules going forward:
+1. Never re-add `.env`, or any file containing real keys, to a commit — check `.gitignore` covers it before every commit that touches env-related files. Real key values go only into Railway's environment variable settings, never into a committed file.
+2. Never print, log, or echo full key values back in chat, commit messages, or code comments.
 
 ## Editing rules — follow these on every task
 
@@ -74,18 +77,17 @@ Before any other work in this repo:
 
 ## Current status
 
-Initial version of `server.js` + `index.html` built and pushed to `github.com/giftVisuals/polycool-repost-bot`. Not yet deployed or tested end-to-end. Known gaps below.
+Deployed and live on Railway (`polycool-repost-bot-production.up.railway.app`), connected to `main`, auto-redeploys on push. All env vars are set including real Apify + Post Bridge credentials. Confirmed working end-to-end at least once: Apify fetch → download → dashboard box editor → rebrand (both logo and custom-text modes tested) → password-gated approve/reject queue. `PROCESS_SINCE_DATE` stops it from ever touching Polymarket's back-catalog.
+
+Not yet confirmed: an actual Approve click going all the way through to a real post landing on Polycool's TikTok/YouTube — everything up to that button has been tested, but the live Post Bridge upload+publish call itself hasn't been watched succeed yet.
 
 ## Next steps (in order)
 
-1. **Resolve the `.env` security issue above** — this blocks everything else.
-2. **Add the real logo file** at `assets/polycool-logo.png` (transparent PNG, sized to blanket the old Polymarket bug). The pipeline will fail without this file present.
-3. **Get the real Post Bridge account IDs** for Polycool's TikTok and YouTube: call `GET https://api.post-bridge.com/v1/social-accounts` with the API key, find the two Polycool entries, set `POST_BRIDGE_TIKTOK_ACCOUNT_ID` / `POST_BRIDGE_YOUTUBE_ACCOUNT_ID` in Railway.
-4. **Verify Apify field names against a real run.** `fetchLatestInstagramPosts()` in `server.js` assumes fields `id`, `videoUrl`, `caption`, `timestamp` from the `apify~instagram-scraper` actor. Run it once against the real `INSTAGRAM_SOURCE_URL`, inspect the actual dataset output in the Apify console, and fix field names if they differ.
-5. **Calibrate `LOGO_COVER_X/Y/W/H` and `LOGO_OVERLAY_X/Y`** against a real downloaded video — current values in `.env.example` are placeholders/estimates, not measured.
-6. **Set all env vars in Railway** (never in a committed file) and deploy — ask for permission first per the rule above.
-7. **Test one full cycle manually** via the dashboard's "Check now" button before relying on the cron schedule.
-8. **Consider a Railway Volume** mounted at `/app/data` if `state.json` needs to survive container restarts (currently resets on redeploy).
+1. **Do one real end-to-end approve** — pick a video in Pending Review, hit Approve, and confirm it actually shows up on Polycool's TikTok and YouTube.
+2. **Try the box editor on more of Polymarket's video styles** as they show up (corner bug, tweet card, trending card, others not seen yet) — logo mode and custom-text mode should both hold up, but only real-world use will surface layout cases that don't.
+3. **Replace the placeholder logo assets** (`assets/polycool-logo.png` / `-light.png`) with professionally designed ones when available — current ones were generated from a phone screenshot.
+4. **Consider a Railway Volume** mounted at `/app/data`. Right now `data/raw` and `data/pending` (and `state.json`) are wiped on every redeploy — anything sitting in Needs Setup or Pending Review at deploy time is lost. Worth doing before this runs unattended for real.
+5. **Post Bridge webhook** (get notified when a post finishes) — intentionally skipped for now, not essential. Revisit if you want pass/fail confirmation on published posts.
 
 ---
 
