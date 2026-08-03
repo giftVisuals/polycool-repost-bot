@@ -26,8 +26,11 @@ const LOGO_PATH_LIGHT = path.join(__dirname, "assets", "polycool-logo-light.png"
 const FONT_DIR = path.join(__dirname, "assets", "fonts");
 const OCR_LANG_PATH = path.join(__dirname, "node_modules", "@tesseract.js-data", "eng", "4.0.0_best_int");
 
-app.use("/pending", express.static(PENDING_DIR)); // lets <video> tags play queued clips
-app.use("/raw", express.static(RAW_DIR)); // serves raw clips + their frame previews for the box editor
+// no-store: filenames are reused (always <post-id>.mp4/.jpg), so a rejected-then-
+// re-rebranded post could otherwise show a browser-cached copy of the old file.
+const noCache = { setHeaders: (res) => res.set("Cache-Control", "no-store") };
+app.use("/pending", express.static(PENDING_DIR, noCache)); // lets <video> tags play queued clips
+app.use("/raw", express.static(RAW_DIR, noCache)); // serves raw clips + their frame previews for the box editor
 
 const ENV = {
   apifyToken: process.env.APIFY_API_TOKEN,
