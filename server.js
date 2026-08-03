@@ -31,6 +31,8 @@ const ENV = {
   tiktokAccountId: process.env.POST_BRIDGE_TIKTOK_ACCOUNT_ID,
   youtubeAccountId: process.env.POST_BRIDGE_YOUTUBE_ACCOUNT_ID,
   intervalMinutes: parseInt(process.env.CHECK_INTERVAL_MINUTES || "20", 10),
+  // Never process anything posted before this date, no matter what Apify returns.
+  processSinceDate: new Date(process.env.PROCESS_SINCE_DATE || "2026-08-03T00:00:00Z"),
   logoCover: {
     x: process.env.LOGO_COVER_X || "16",
     y: process.env.LOGO_COVER_Y || "16",
@@ -218,7 +220,12 @@ async function checkForNewContent() {
   state.lastCheck = new Date().toISOString();
   try {
     const posts = await fetchLatestInstagramPosts();
-    const newPosts = posts.filter((p) => p.id !== state.lastProcessedId);
+    const tooOld = posts.filter((p) => new Date(p.timestamp) < ENV.processSinceDate).length;
+    if (tooOld > 0) log(`Skipped ${tooOld} post(s) from before ${ENV.processSinceDate.toDateString()}.`);
+
+    const newPosts = posts.filter(
+      (p) => p.id !== state.lastProcessedId && new Date(p.timestamp) >= ENV.processSinceDate
+    );
 
     if (newPosts.length === 0) {
       log("No new videos found.");
