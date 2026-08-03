@@ -93,9 +93,19 @@ async function fetchLatestInstagramPosts() {
   const posts = await res.json();
   // NOTE: verify these field names against your actual Apify dataset output
   // (Apify actors occasionally rename fields) — check one run in the Apify console.
+  const carouselCount = posts.filter((p) => p.videoUrl && isCarousel(p)).length;
+  if (carouselCount > 0) log(`Skipped ${carouselCount} carousel post(s) — only single-video posts (Reels/Shorts) are processed.`);
+
   return posts
-    .filter((p) => p.videoUrl)
+    .filter((p) => p.videoUrl && !isCarousel(p))
     .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+}
+
+// Carousels ("Sidecar" posts) have multiple slides — the Apify Instagram scraper marks
+// them with type "Sidecar" and/or a non-empty childPosts array. Skip those entirely,
+// we only want single-video Reels/Shorts.
+function isCarousel(post) {
+  return post.type === "Sidecar" || (Array.isArray(post.childPosts) && post.childPosts.length > 0);
 }
 
 // ---------- step 2: download the source video ----------
@@ -390,6 +400,32 @@ app.get("/api/raw/:id/meta", async (req, res) => {
 app.post("/api/raw/:id/rebrand", async (req, res) => {
   const item = state.raw.find((r) => r.id === req.params.id);
   if (!item) return res.status(404).json({ ok: false, error: "Not found" });
+
+  const rawPathNoEdit = path.join(RAW_DIR, item.filename);
+  const outputPathNoEdit = path.join(PENDING_DIR, item.filename);
+  if (req.body && req.body.mode === "none") {
+    try {
+      await fsp.rename(rawPathNoEdit, outputPathNoEdit);
+      state.pending.push({
+        id: item.id,
+        filename: item.filename,
+        caption: item.caption,
+        originalCaption: item.originalCaption,
+        addedAt: new Date().toISOString(),
+        theme: null,
+        box: null,
+        mode: "none",
+      });
+      state.raw = state.raw.filter((r) => r.id !== item.id);
+      await fsp.rm(path.join(RAW_DIR, `${item.id}.jpg`), { force: true });
+      log(`Queued ${item.id} for review with no on-video edit.`);
+      await saveState();
+      return res.json({ ok: true });
+    } catch (err) {
+      log(`Queueing failed for ${item.id}: ${err.message}`);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  }
 
   const { x, y, w, h, mode, text } = req.body || {};
   const box = { x: Math.round(Number(x)), y: Math.round(Number(y)), w: Math.round(Number(w)), h: Math.round(Number(h)) };

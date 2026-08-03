@@ -343,6 +343,7 @@
         <div class="mode-row">
           <label><input type="radio" name="mode-${r.id}" class="mode-logo" value="logo" checked> Logo</label>
           <label><input type="radio" name="mode-${r.id}" class="mode-text" value="text"> Custom text</label>
+          <label><input type="radio" name="mode-${r.id}" class="mode-none" value="none"> No branding to cover</label>
           <input type="text" class="text-input" placeholder="Polycool" style="display:none">
         </div>
         <div class="raw-actions">
@@ -430,7 +431,9 @@
     if(!btn) return;
     const item = btn.closest('.raw-item');
     const id = btn.dataset.id;
-    const mode = item.querySelector('.mode-text').checked ? 'text' : 'logo';
+    const mode = item.querySelector('.mode-text').checked ? 'text'
+      : item.querySelector('.mode-none').checked ? 'none'
+      : 'logo';
     const text = item.querySelector('.text-input').value;
     const payload = {
       x: item.querySelector('.box-x').value,
