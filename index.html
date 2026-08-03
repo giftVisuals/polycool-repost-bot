@@ -251,10 +251,29 @@
     if(!target) return;
     const id = target.dataset.id;
     const action = target.dataset.action;
+
+    const password = prompt(
+      action === 'approve'
+        ? 'Enter password to approve and post this video:'
+        : 'Enter password to reject this video:'
+    );
+    if(password === null) return; // cancelled
+
     target.disabled = true;
     try{
-      await fetch(`/api/pending/${encodeURIComponent(id)}/${action}`, { method:'POST' });
-    }catch(e){}
+      const res = await fetch(`/api/pending/${encodeURIComponent(id)}/${action}`, {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if(!data.ok){
+        alert(data.error || 'That didn\'t work.');
+      }
+    }catch(e){
+      alert('Network error, please try again.');
+    }
+    target.disabled = false;
     await refreshPending();
     await refreshStatus();
   });

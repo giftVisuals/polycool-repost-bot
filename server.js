@@ -7,11 +7,13 @@ const express = require("express");
 const cron = require("node-cron");
 const ffmpegPath = require("ffmpeg-static");
 const { execFile } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const fsp = fs.promises;
 const path = require("path");
 
 const app = express();
+app.use(express.json());
 app.use(express.static(__dirname)); // serves index.html
 
 const DATA_DIR = path.join(__dirname, "data");
@@ -33,6 +35,7 @@ const ENV = {
   intervalMinutes: parseInt(process.env.CHECK_INTERVAL_MINUTES || "20", 10),
   // Never process anything posted before this date, no matter what Apify returns.
   processSinceDate: new Date(process.env.PROCESS_SINCE_DATE || "2026-08-03T00:00:00Z"),
+  approvalPassword: process.env.APPROVAL_PASSWORD || null,
   logoCover: {
     x: process.env.LOGO_COVER_X || "16",
     y: process.env.LOGO_COVER_Y || "16",
@@ -310,7 +313,20 @@ app.get("/api/pending", (req, res) => {
   });
 });
 
+function isPasswordValid(submitted) {
+  if (!ENV.approvalPassword) return false;
+  const a = Buffer.from(String(submitted || ""));
+  const b = Buffer.from(ENV.approvalPassword);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 app.post("/api/pending/:id/approve", async (req, res) => {
+  if (!ENV.approvalPassword) {
+    return res.status(500).json({ ok: false, error: "APPROVAL_PASSWORD is not set on the server." });
+  }
+  if (!isPasswordValid(req.body && req.body.password)) {
+    return res.status(401).json({ ok: false, error: "Incorrect password." });
+  }
   const item = state.pending.find((p) => p.id === req.params.id);
   if (!item) return res.status(404).json({ ok: false, error: "Not found" });
   try {
@@ -330,6 +346,12 @@ app.post("/api/pending/:id/approve", async (req, res) => {
 });
 
 app.post("/api/pending/:id/reject", async (req, res) => {
+  if (!ENV.approvalPassword) {
+    return res.status(500).json({ ok: false, error: "APPROVAL_PASSWORD is not set on the server." });
+  }
+  if (!isPasswordValid(req.body && req.body.password)) {
+    return res.status(401).json({ ok: false, error: "Incorrect password." });
+  }
   const item = state.pending.find((p) => p.id === req.params.id);
   if (!item) return res.status(404).json({ ok: false, error: "Not found" });
   state.pending = state.pending.filter((p) => p.id !== item.id);
