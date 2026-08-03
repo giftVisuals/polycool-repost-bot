@@ -17,13 +17,15 @@ app.use(express.json());
 app.use(express.static(__dirname)); // serves index.html
 
 const DATA_DIR = path.join(__dirname, "data");
-const TMP_DIR = path.join(DATA_DIR, "tmp");
+const RAW_DIR = path.join(DATA_DIR, "raw");
 const PENDING_DIR = path.join(DATA_DIR, "pending");
 const STATE_FILE = path.join(DATA_DIR, "state.json");
 const LOGO_PATH_DARK = path.join(__dirname, "assets", "polycool-logo.png");
 const LOGO_PATH_LIGHT = path.join(__dirname, "assets", "polycool-logo-light.png");
+const FONT_DIR = path.join(__dirname, "assets", "fonts");
 
 app.use("/pending", express.static(PENDING_DIR)); // lets <video> tags play queued clips
+app.use("/raw", express.static(RAW_DIR)); // serves raw clips + their frame previews for the box editor
 
 const ENV = {
   apifyToken: process.env.APIFY_API_TOKEN,
@@ -36,31 +38,29 @@ const ENV = {
   // Never process anything posted before this date, no matter what Apify returns.
   processSinceDate: new Date(process.env.PROCESS_SINCE_DATE || "2026-08-03T00:00:00Z"),
   approvalPassword: process.env.APPROVAL_PASSWORD || null,
-  logoCover: {
-    x: process.env.LOGO_COVER_X || "16",
-    y: process.env.LOGO_COVER_Y || "16",
-    w: process.env.LOGO_COVER_W || "280",
-    h: process.env.LOGO_COVER_H || "72",
+  // Starting point for the box editor on each new video — not auto-applied anymore,
+  // just a convenient prefill since Polymarket's layout keeps changing.
+  defaultBox: {
+    x: parseInt(process.env.LOGO_COVER_X || "16", 10),
+    y: parseInt(process.env.LOGO_COVER_Y || "16", 10),
+    w: parseInt(process.env.LOGO_COVER_W || "280", 10),
+    h: parseInt(process.env.LOGO_COVER_H || "72", 10),
   },
-  logoOverlay: {
-    x: process.env.LOGO_OVERLAY_X || "20",
-    y: process.env.LOGO_OVERLAY_Y || "20",
-  },
-  expectedVideoWidth: process.env.EXPECTED_VIDEO_WIDTH ? parseInt(process.env.EXPECTED_VIDEO_WIDTH, 10) : null,
-  expectedVideoHeight: process.env.EXPECTED_VIDEO_HEIGHT ? parseInt(process.env.EXPECTED_VIDEO_HEIGHT, 10) : null,
   port: process.env.PORT || 3000,
 };
 
 // ---------- state + logging ----------
 
-let state = { lastProcessedId: null, lastCheck: null, history: [], pending: [] };
+let state = { lastProcessedId: null, lastCheck: null, history: [], pending: [], raw: [], lastBox: null };
 
 async function loadState() {
-  await fsp.mkdir(TMP_DIR, { recursive: true });
+  await fsp.mkdir(RAW_DIR, { recursive: true });
   await fsp.mkdir(PENDING_DIR, { recursive: true });
   try {
     state = JSON.parse(await fsp.readFile(STATE_FILE, "utf8"));
     state.pending = state.pending || [];
+    state.raw = state.raw || [];
+    state.lastBox = state.lastBox || null;
   } catch {
     await saveState();
   }
@@ -122,14 +122,24 @@ function getVideoDimensions(filePath) {
   });
 }
 
-// ---------- step 2c: detect whether the burned-in card is light or dark themed ----------
-// Polymarket's posts use a white card with dark text sometimes, and a black card with
-// light text other times. Sample the average brightness of the cover-box region on the
-// first frame to pick the matching cover color + logo variant automatically.
+// ---------- step 2c: grab a still frame so the dashboard can show a box editor ----------
 
-function detectCardTheme(inputPath) {
+function extractFirstFrame(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    execFile(ffmpegPath, ["-i", inputPath, "-vframes", "1", "-y", outputPath], (err) =>
+      err ? reject(err) : resolve(outputPath)
+    );
+  });
+}
+
+// ---------- step 2d: detect whether a given box region is light or dark themed ----------
+// Polymarket's posts use a white card with dark text sometimes, and a black card with
+// light text other times. Sample the average brightness of the box on the first frame
+// to pick a matching cover color + text/logo color automatically.
+
+function detectBoxTheme(inputPath, box) {
   return new Promise((resolve) => {
-    const { x, y, w, h } = ENV.logoCover;
+    const { x, y, w, h } = box;
     const filter = `crop=${w}:${h}:${x}:${y},signalstats,metadata=print:key=lavfi.signalstats.YAVG`;
     execFile(ffmpegPath, ["-i", inputPath, "-vf", filter, "-vframes", "1", "-f", "null", "-"], (err, stdout, stderr) => {
       const match = /lavfi\.signalstats\.YAVG=([\d.]+)/.exec(stderr || "");
@@ -140,27 +150,84 @@ function detectCardTheme(inputPath) {
   });
 }
 
-// ---------- step 3: cover old logo + overlay Polycool logo ----------
+// ffmpeg-static's bundled binary has no "drawtext" filter compiled in, so custom text
+// is rendered via the "ass" (libass subtitle) filter instead, which is available and
+// works with our bundled font regardless of what fonts the host OS has installed.
+// Curly braces/backslashes are stripped since they're ASS override-tag syntax — left in,
+// injected text could add its own positioning/formatting commands.
+function escapeAssText(str) {
+  return String(str).replace(/[{}\\]/g, "").replace(/\r?\n/g, " ");
+}
 
-function rebrandVideo(inputPath, outputPath, theme) {
-  return new Promise((resolve, reject) => {
-    const { x, y, w, h } = ENV.logoCover;
-    const isLight = theme === "light";
-    const coverColor = isLight ? "white" : "black";
+async function buildAssFile(assPath, text, box, theme, videoWidth, videoHeight) {
+  const isLight = theme === "light";
+  const color = isLight ? "&H00000000" : "&H00FFFFFF"; // ASS is &HAABBGGRR; 00 alpha = opaque
+  const fontSize = Math.max(10, Math.floor(box.h * 0.6));
+  const cx = Math.round(box.x + box.w / 2);
+  const cy = Math.round(box.y + box.h / 2);
+  const ass = `[Script Info]
+ScriptType: v4.00+
+PlayResX: ${videoWidth}
+PlayResY: ${videoHeight}
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,DejaVu Sans,${fontSize},${color},&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,0,0,5,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,9:59:59.00,Default,,0,0,0,,{\\pos(${cx},${cy})}${escapeAssText(text)}
+`;
+  await fsp.writeFile(assPath, ass);
+}
+
+// ---------- step 3: cover old branding + put Polycool's logo or text in its place ----------
+// box = { x, y, w, h } drawn by hand on the dashboard for this specific video.
+// mode "logo" pastes the (auto light/dark) Polycool logo, scaled to fit inside the box.
+// mode "text" draws custom text in the box instead — for layouts where only the word
+// needs swapping and the icon next to it doesn't need covering.
+
+async function rebrandVideo(inputPath, outputPath, box, mode, text, theme) {
+  const { x, y, w, h } = box;
+  const isLight = theme === "light";
+  const coverColor = isLight ? "white" : "black";
+  const args = ["-i", inputPath];
+  let filter;
+  let assPath = null;
+
+  if (mode === "text") {
+    const { width, height } = await getVideoDimensions(inputPath);
+    assPath = `${outputPath}.ass`;
+    await buildAssFile(assPath, text, box, theme, width, height);
+    filter =
+      `[0:v]drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=${coverColor}:t=fill,` +
+      `ass=filename=${assPath}:fontsdir=${FONT_DIR}`;
+  } else {
     const logoPath = isLight ? LOGO_PATH_LIGHT : LOGO_PATH_DARK;
-    const filter =
+    args.push("-i", logoPath);
+    filter =
       `[0:v]drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=${coverColor}:t=fill[bg];` +
-      `[bg][1:v]overlay=x=${ENV.logoOverlay.x}:y=${ENV.logoOverlay.y}`;
-    const args = [
-      "-i", inputPath,
-      "-i", logoPath,
-      "-filter_complex", filter,
-      "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
-      "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart",
-      "-y", outputPath,
-    ];
-    execFile(ffmpegPath, args, (err) => (err ? reject(err) : resolve(outputPath)));
-  });
+      `[1:v]scale=w=${w}:h=${h}:force_original_aspect_ratio=decrease,` +
+      `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=0x00000000[logo];` +
+      `[bg][logo]overlay=x=${x}:y=${y}`;
+  }
+
+  args.push(
+    "-filter_complex", filter,
+    "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
+    "-pix_fmt", "yuv420p", "-c:a", "copy", "-movflags", "+faststart",
+    "-y", outputPath
+  );
+
+  try {
+    await new Promise((resolve, reject) => {
+      execFile(ffmpegPath, args, (err, stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve()));
+    });
+  } finally {
+    if (assPath) await fsp.rm(assPath, { force: true });
+  }
+  return outputPath;
 }
 
 // ---------- step 4: rewrite caption ----------
@@ -238,43 +305,28 @@ async function checkForNewContent() {
 
     let processedCount = 0;
     for (const post of newPosts) {
-      const inputPath = path.join(TMP_DIR, `in-${post.id}.mp4`);
       const filename = `${post.id}.mp4`;
-      const outputPath = path.join(PENDING_DIR, filename);
+      const videoPath = path.join(RAW_DIR, filename);
+      const framePath = path.join(RAW_DIR, `${post.id}.jpg`);
       try {
         log(`New video found: ${post.id}`);
-        await downloadFile(post.videoUrl, inputPath);
+        await downloadFile(post.videoUrl, videoPath);
+        await extractFirstFrame(videoPath, framePath);
 
-        let sizeWarning = null;
-        if (ENV.expectedVideoWidth && ENV.expectedVideoHeight) {
-          const { width, height } = await getVideoDimensions(inputPath);
-          if (width !== ENV.expectedVideoWidth || height !== ENV.expectedVideoHeight) {
-            sizeWarning = `Video is ${width}x${height}, expected ${ENV.expectedVideoWidth}x${ENV.expectedVideoHeight} — logo cover box may be misaligned, check closely before approving.`;
-            log(`Size mismatch on ${post.id}: ${sizeWarning}`);
-          }
-        }
-
-        const theme = await detectCardTheme(inputPath);
-        log(`Detected ${theme} card theme for ${post.id}.`);
-        await rebrandVideo(inputPath, outputPath, theme);
-
-        state.pending.push({
+        state.raw.push({
           id: post.id,
           filename,
           caption: rebrandCaption(post.caption),
           originalCaption: post.caption || "",
           addedAt: new Date().toISOString(),
-          theme,
-          sizeWarning,
         });
         state.lastProcessedId = post.id;
         processedCount++;
-        log(`New video ready for review: ${post.id}`);
+        log(`New video ready for setup: ${post.id}`);
       } catch (err) {
         log(`Failed on ${post.id}: ${err.message}`);
-        await fsp.rm(outputPath, { force: true });
-      } finally {
-        await fsp.rm(inputPath, { force: true });
+        await fsp.rm(videoPath, { force: true });
+        await fsp.rm(framePath, { force: true });
       }
     }
 
@@ -311,6 +363,70 @@ app.get("/api/pending", (req, res) => {
   res.json({
     pending: state.pending.map((p) => ({ ...p, videoUrl: `/pending/${p.filename}` })),
   });
+});
+
+app.get("/api/raw", (req, res) => {
+  res.json({
+    raw: state.raw.map((r) => ({
+      ...r,
+      videoUrl: `/raw/${r.filename}`,
+      frameUrl: `/raw/${r.id}.jpg`,
+    })),
+    defaultBox: state.lastBox || ENV.defaultBox,
+  });
+});
+
+app.get("/api/raw/:id/meta", async (req, res) => {
+  const item = state.raw.find((r) => r.id === req.params.id);
+  if (!item) return res.status(404).json({ ok: false, error: "Not found" });
+  try {
+    const dimensions = await getVideoDimensions(path.join(RAW_DIR, item.filename));
+    res.json({ ok: true, ...dimensions });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/api/raw/:id/rebrand", async (req, res) => {
+  const item = state.raw.find((r) => r.id === req.params.id);
+  if (!item) return res.status(404).json({ ok: false, error: "Not found" });
+
+  const { x, y, w, h, mode, text } = req.body || {};
+  const box = { x: Math.round(Number(x)), y: Math.round(Number(y)), w: Math.round(Number(w)), h: Math.round(Number(h)) };
+  if (!Number.isFinite(box.x) || !Number.isFinite(box.y) || box.w <= 0 || box.h <= 0) {
+    return res.status(400).json({ ok: false, error: "Invalid box — drag a rectangle over the branding first." });
+  }
+  if (mode === "text" && !String(text || "").trim()) {
+    return res.status(400).json({ ok: false, error: "Enter replacement text first." });
+  }
+
+  const rawPath = path.join(RAW_DIR, item.filename);
+  const outputPath = path.join(PENDING_DIR, item.filename);
+  try {
+    const theme = await detectBoxTheme(rawPath, box);
+    await rebrandVideo(rawPath, outputPath, box, mode, text, theme);
+
+    state.pending.push({
+      id: item.id,
+      filename: item.filename,
+      caption: item.caption,
+      originalCaption: item.originalCaption,
+      addedAt: new Date().toISOString(),
+      theme,
+      box,
+      mode,
+    });
+    state.raw = state.raw.filter((r) => r.id !== item.id);
+    state.lastBox = box;
+    await fsp.rm(rawPath, { force: true });
+    await fsp.rm(path.join(RAW_DIR, `${item.id}.jpg`), { force: true });
+    log(`Rebranded ${item.id} (${theme} theme, ${mode} mode) — ready for review.`);
+    await saveState();
+    res.json({ ok: true });
+  } catch (err) {
+    log(`Rebrand failed for ${item.id}: ${err.message}`);
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 function isPasswordValid(submitted) {

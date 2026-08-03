@@ -76,6 +76,40 @@
   button:hover{opacity:0.85;}
   button:disabled{opacity:0.4;cursor:default;}
 
+  .raw{
+    background:var(--panel);
+    border:1px solid var(--panel-line);
+    border-radius:14px;
+    padding:18px 20px;
+    margin-bottom:20px;
+  }
+  .raw h2{font-size:12px;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin:0 0 6px;font-weight:600;}
+  .raw .hint{font-size:12px;color:var(--muted);margin:0 0 14px;line-height:1.5;}
+  .raw ul{list-style:none;margin:0;padding:0;}
+  .raw .empty{color:var(--muted);font-family:var(--sans);font-size:13px;padding:8px 0;}
+  .raw-item{padding:16px 0;border-bottom:1px solid var(--panel-line);}
+  .raw-item:last-child{border-bottom:none;}
+  .raw-item .caption{margin:0 0 10px;font-size:13px;color:var(--text);line-height:1.4;word-wrap:break-word;}
+  .frame-wrap{position:relative;display:inline-block;max-width:100%;touch-action:none;cursor:crosshair;border-radius:8px;overflow:hidden;}
+  .frame-wrap img{display:block;max-width:100%;height:auto;user-select:none;-webkit-user-drag:none;}
+  .drag-box{
+    position:absolute;border:2px solid var(--accent);background:rgba(79,232,201,0.18);
+    display:none;pointer-events:none;
+  }
+  .box-fields{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px;}
+  .box-fields label{display:flex;flex-direction:column;gap:4px;font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;}
+  .box-fields input{
+    background:var(--bg);border:1px solid var(--panel-line);color:var(--text);
+    border-radius:6px;padding:6px 8px;font-family:var(--mono);font-size:12px;width:100%;
+  }
+  .mode-row{display:flex;align-items:center;gap:14px;margin-top:14px;flex-wrap:wrap;}
+  .mode-row label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text);cursor:pointer;}
+  .mode-row input[type="text"]{
+    flex:1;min-width:160px;background:var(--bg);border:1px solid var(--panel-line);color:var(--text);
+    border-radius:6px;padding:8px 10px;font-size:13px;
+  }
+  .raw-actions{margin-top:14px;}
+
   .pending{
     background:var(--panel);
     border:1px solid var(--panel-line);
@@ -137,7 +171,7 @@
   <div class="pipeline">
     <div class="stages">
       <div class="stage" id="stage-fetch"><div class="node">1</div><label>Fetch<br>Instagram</label></div>
-      <div class="stage" id="stage-rebrand"><div class="node">2</div><label>Rebrand<br>video + caption</label></div>
+      <div class="stage" id="stage-rebrand"><div class="node">2</div><label>Download<br>+ ready to edit</label></div>
       <div class="stage" id="stage-upload"><div class="node">3</div><label>Awaiting<br>your review</label></div>
       <div class="stage" id="stage-live"><div class="node">4</div><label>Live on<br>TikTok / YouTube</label></div>
     </div>
@@ -146,6 +180,12 @@
       <div class="item">Auto-check: <b id="interval">every 20 min</b></div>
       <button id="check-btn">Check now</button>
     </div>
+  </div>
+
+  <div class="raw">
+    <h2>Needs Setup</h2>
+    <p class="hint">Drag a box over the branding on the frame below, choose Logo or Custom text, then rebrand it.</p>
+    <ul id="raw-list"><li class="empty">Nothing waiting for setup.</li></ul>
   </div>
 
   <div class="pending">
@@ -167,6 +207,7 @@
   const intervalEl = document.getElementById('interval');
   const logList = document.getElementById('log-list');
   const pendingList = document.getElementById('pending-list');
+  const rawList = document.getElementById('raw-list');
   const stages = ['stage-fetch','stage-rebrand','stage-upload','stage-live'].map(id => document.getElementById(id));
 
   function formatTime(iso){
@@ -227,7 +268,6 @@
         <div class="pending-info">
           <p class="caption">${escapeHtml(p.caption)}</p>
           ${p.theme ? `<span class="theme-tag">${escapeHtml(p.theme)} card detected</span>` : ''}
-          ${p.sizeWarning ? `<p class="warning">⚠ ${escapeHtml(p.sizeWarning)}</p>` : ''}
           <span class="t">queued ${formatTime(p.addedAt)}</span>
           <div class="pending-actions">
             <button class="approve" data-id="${p.id}" data-action="approve">Approve</button>
@@ -238,10 +278,14 @@
     `).join('');
   }
 
+  let lastPendingIds = '';
   async function refreshPending(){
     try{
       const res = await fetch('/api/pending');
       const data = await res.json();
+      const ids = (data.pending || []).map(p => p.id).join(',');
+      if(ids === lastPendingIds) return;
+      lastPendingIds = ids;
       renderPending(data.pending);
     }catch(e){}
   }
@@ -278,6 +322,146 @@
     await refreshStatus();
   });
 
+  function renderRaw(list, defaultBox){
+    if(!list || list.length === 0){
+      rawList.innerHTML = '<li class="empty">Nothing waiting for setup.</li>';
+      return;
+    }
+    rawList.innerHTML = list.map(r => `
+      <li class="raw-item" data-id="${r.id}">
+        <p class="caption">${escapeHtml(r.caption)}</p>
+        <div class="frame-wrap">
+          <img src="${r.frameUrl}" draggable="false" alt="video frame">
+          <div class="drag-box"></div>
+        </div>
+        <div class="box-fields">
+          <label>X <input type="number" class="box-x" value="${defaultBox.x}"></label>
+          <label>Y <input type="number" class="box-y" value="${defaultBox.y}"></label>
+          <label>W <input type="number" class="box-w" value="${defaultBox.w}"></label>
+          <label>H <input type="number" class="box-h" value="${defaultBox.h}"></label>
+        </div>
+        <div class="mode-row">
+          <label><input type="radio" name="mode-${r.id}" class="mode-logo" value="logo" checked> Logo</label>
+          <label><input type="radio" name="mode-${r.id}" class="mode-text" value="text"> Custom text</label>
+          <input type="text" class="text-input" placeholder="Polycool" style="display:none">
+        </div>
+        <div class="raw-actions">
+          <button class="rebrand-btn" data-id="${r.id}">Rebrand &amp; queue for review</button>
+        </div>
+      </li>
+    `).join('');
+
+    rawList.querySelectorAll('.raw-item').forEach(item => attachBoxEditor(item));
+  }
+
+  function attachBoxEditor(item){
+    const img = item.querySelector('.frame-wrap img');
+    const boxEl = item.querySelector('.drag-box');
+    const xInput = item.querySelector('.box-x');
+    const yInput = item.querySelector('.box-y');
+    const wInput = item.querySelector('.box-w');
+    const hInput = item.querySelector('.box-h');
+    const modeText = item.querySelector('.mode-text');
+    const modeLogo = item.querySelector('.mode-logo');
+    const textInput = item.querySelector('.text-input');
+
+    function drawFromInputs(){
+      if(!img.naturalWidth) return;
+      const rect = img.getBoundingClientRect();
+      const scaleX = rect.width / img.naturalWidth;
+      const scaleY = rect.height / img.naturalHeight;
+      boxEl.style.left = (Number(xInput.value) || 0) * scaleX + 'px';
+      boxEl.style.top = (Number(yInput.value) || 0) * scaleY + 'px';
+      boxEl.style.width = (Number(wInput.value) || 0) * scaleX + 'px';
+      boxEl.style.height = (Number(hInput.value) || 0) * scaleY + 'px';
+      boxEl.style.display = 'block';
+    }
+
+    [xInput, yInput, wInput, hInput].forEach(input => input.addEventListener('input', drawFromInputs));
+    modeText.addEventListener('change', () => { textInput.style.display = modeText.checked ? 'block' : 'none'; });
+    modeLogo.addEventListener('change', () => { textInput.style.display = modeText.checked ? 'block' : 'none'; });
+
+    if(img.complete && img.naturalWidth) drawFromInputs();
+    img.addEventListener('load', drawFromInputs);
+
+    function toNatural(clientX, clientY){
+      const rect = img.getBoundingClientRect();
+      const scaleX = img.naturalWidth / rect.width;
+      const scaleY = img.naturalHeight / rect.height;
+      return {
+        x: Math.max(0, Math.min(img.naturalWidth, Math.round((clientX - rect.left) * scaleX))),
+        y: Math.max(0, Math.min(img.naturalHeight, Math.round((clientY - rect.top) * scaleY))),
+      };
+    }
+
+    let start = null;
+    const frameWrap = item.querySelector('.frame-wrap');
+    frameWrap.addEventListener('pointerdown', (e) => {
+      frameWrap.setPointerCapture(e.pointerId);
+      start = toNatural(e.clientX, e.clientY);
+    });
+    frameWrap.addEventListener('pointermove', (e) => {
+      if(!start) return;
+      const cur = toNatural(e.clientX, e.clientY);
+      const x = Math.min(start.x, cur.x), y = Math.min(start.y, cur.y);
+      const w = Math.abs(cur.x - start.x), h = Math.abs(cur.y - start.y);
+      xInput.value = x; yInput.value = y; wInput.value = w; hInput.value = h;
+      drawFromInputs();
+    });
+    frameWrap.addEventListener('pointerup', () => { start = null; });
+  }
+
+  let lastRawIds = '';
+  async function refreshRaw(){
+    try{
+      const res = await fetch('/api/raw');
+      const data = await res.json();
+      const ids = (data.raw || []).map(r => r.id).join(',');
+      // Skip re-rendering if the same items are still there — a poll firing mid-drag
+      // would otherwise wipe out whatever box the user is in the middle of drawing.
+      if(ids === lastRawIds) return;
+      lastRawIds = ids;
+      renderRaw(data.raw, data.defaultBox);
+    }catch(e){}
+  }
+
+  rawList.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.rebrand-btn');
+    if(!btn) return;
+    const item = btn.closest('.raw-item');
+    const id = btn.dataset.id;
+    const mode = item.querySelector('.mode-text').checked ? 'text' : 'logo';
+    const text = item.querySelector('.text-input').value;
+    const payload = {
+      x: item.querySelector('.box-x').value,
+      y: item.querySelector('.box-y').value,
+      w: item.querySelector('.box-w').value,
+      h: item.querySelector('.box-h').value,
+      mode,
+      text,
+    };
+    btn.disabled = true;
+    try{
+      const res = await fetch(`/api/raw/${encodeURIComponent(id)}/rebrand`, {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if(!data.ok){
+        alert(data.error || 'That didn\'t work.');
+        btn.disabled = false;
+        return;
+      }
+    }catch(e){
+      alert('Network error, please try again.');
+      btn.disabled = false;
+      return;
+    }
+    await refreshRaw();
+    await refreshPending();
+  });
+
   async function checkNow(){
     btn.disabled = true;
     badge.textContent = 'CHECKING';
@@ -287,6 +471,7 @@
       await res.json();
     }catch(e){}
     await refreshStatus();
+    await refreshRaw();
     await refreshPending();
     badge.textContent = 'IDLE';
     btn.disabled = false;
@@ -294,8 +479,10 @@
 
   btn.addEventListener('click', checkNow);
   refreshStatus();
+  refreshRaw();
   refreshPending();
   setInterval(refreshStatus, 15000);
+  setInterval(refreshRaw, 15000);
   setInterval(refreshPending, 15000);
 </script>
 </body>
