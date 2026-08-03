@@ -90,6 +90,8 @@
   .raw-item{padding:16px 0;border-bottom:1px solid var(--panel-line);}
   .raw-item:last-child{border-bottom:none;}
   .raw-item .caption{margin:0 0 10px;font-size:13px;color:var(--text);line-height:1.4;word-wrap:break-word;}
+  .raw-preview{display:block;max-width:100%;max-height:280px;border-radius:8px;background:#000;margin-bottom:8px;}
+  .raw-item .hint{margin:0 0 10px;}
   .frame-wrap{position:relative;display:inline-block;max-width:100%;touch-action:none;cursor:crosshair;border-radius:8px;overflow:hidden;}
   .frame-wrap img{display:block;max-width:100%;height:auto;user-select:none;-webkit-user-drag:none;}
   .drag-box{
@@ -331,6 +333,8 @@
     rawList.innerHTML = list.map(r => `
       <li class="raw-item" data-id="${r.id}">
         <p class="caption">${escapeHtml(r.caption)}</p>
+        <video src="${r.videoUrl}" controls preload="metadata" class="raw-preview"></video>
+        <p class="hint">Watch the clip above to see where/if branding appears, then drag the box on the frame below to match.</p>
         <div class="frame-wrap">
           <img src="${r.frameUrl}" draggable="false" alt="video frame">
           <div class="drag-box"></div>
