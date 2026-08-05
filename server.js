@@ -107,13 +107,15 @@ async function fetchInstagramPosts(directUrls, resultsLimit) {
   const summary = posts.map((p) => `${String(p.id).slice(-6)}:type=${p.type}/pt=${p.productType}`).join(", ");
   log(`Fetched ${posts.length} post(s) — ${summary}`);
 
-  // Reels/Shorts are marked productType "clips" by Apify's Instagram scraper — that's
-  // the documented signal, more reliable than guessing at carousel-specific fields.
-  const isReel = (p) => (p.productType ? p.productType === "clips" : p.videoUrl && !isCarousel(p));
-  const skipped = posts.filter((p) => !isReel(p)).length;
-  if (skipped > 0) log(`Skipped ${skipped} non-Reel post(s) — only Reels/Shorts are processed.`);
+  // Only exclude posts we're CONFIDENT are carousels — requiring productType==="clips"
+  // turned out too strict (Apify doesn't reliably set it) and silently blocked real
+  // Reels for days. There's a human review step for everything now anyway, so bias
+  // toward letting things through rather than guessing them away.
+  const isUsable = (p) => p.videoUrl && !isCarousel(p);
+  const skipped = posts.filter((p) => !isUsable(p)).length;
+  if (skipped > 0) log(`Skipped ${skipped} carousel/non-video post(s).`);
 
-  return posts.filter(isReel).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  return posts.filter(isUsable).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 }
 
 // Fallback only used if this actor's response has no productType field at all.
