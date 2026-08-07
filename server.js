@@ -107,15 +107,28 @@ async function fetchInstagramPosts(directUrls, resultsLimit) {
   const summary = posts.map((p) => `${String(p.id).slice(-6)}:type=${p.type}/pt=${p.productType}`).join(", ");
   log(`Fetched ${posts.length} post(s) — ${summary}`);
 
-  // Only exclude posts we're CONFIDENT are carousels — requiring productType==="clips"
-  // turned out too strict (Apify doesn't reliably set it) and silently blocked real
-  // Reels for days. There's a human review step for everything now anyway, so bias
-  // toward letting things through rather than guessing them away.
-  const isUsable = (p) => p.videoUrl && !isCarousel(p);
-  const skipped = posts.filter((p) => !isUsable(p)).length;
-  if (skipped > 0) log(`Skipped ${skipped} carousel/non-video post(s).`);
+  // Standalone Reels/videos pass through as-is. Carousels ("Sidecar" posts) don't have
+  // their own videoUrl, but Polymarket's carousels usually bundle several real video
+  // clips inside childPosts — pull the first one out instead of skipping the whole
+  // post. Polymarket has been posting almost exclusively carousels lately, so skipping
+  // them entirely left nothing for the pipeline to find for days.
+  const candidates = posts
+    .map((p) => {
+      if (p.videoUrl && !isCarousel(p)) return p;
+      if (isCarousel(p)) {
+        const videoChild = (p.childPosts || []).find((c) => c.type === "Video" && c.videoUrl);
+        if (videoChild) {
+          return { id: videoChild.id, videoUrl: videoChild.videoUrl, caption: p.caption, timestamp: p.timestamp };
+        }
+      }
+      return null;
+    })
+    .filter(Boolean);
 
-  return posts.filter(isUsable).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+  const skipped = posts.length - candidates.length;
+  if (skipped > 0) log(`Skipped ${skipped} post(s) with no usable video (image-only carousels, etc).`);
+
+  return candidates.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 }
 
 // Fallback only used if this actor's response has no productType field at all.
