@@ -299,10 +299,14 @@ async function rebrandVideo(inputPath, outputPath, box, mode, text, theme) {
       `[0:v]drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=${coverColor}:t=fill,` +
       `ass=filename=${assPath}:fontsdir=${FONT_DIR}`;
   } else {
-    const logoPath = isLight ? LOGO_PATH_LIGHT : LOGO_PATH_DARK;
-    args.push("-i", logoPath);
+    // Logo mode only ever uses the one real, provided Polycool asset — never a
+    // generated/derived variant. That means the cover box stays black regardless of
+    // the detected/selected card theme, since that's the only combination the real
+    // asset (white text/icon) reads correctly against. Use Custom text mode instead
+    // for light cards until a real light-theme asset exists.
+    args.push("-i", LOGO_PATH_DARK);
     filter =
-      `[0:v]drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=${coverColor}:t=fill[bg];` +
+      `[0:v]drawbox=x=${x}:y=${y}:w=${w}:h=${h}:color=black:t=fill[bg];` +
       `[1:v]scale=w=${w}:h=${h}:force_original_aspect_ratio=decrease,` +
       `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=0x00000000[logo];` +
       `[bg][logo]overlay=x=${x}:y=${y}`;
