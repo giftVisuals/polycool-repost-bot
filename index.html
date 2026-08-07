@@ -365,6 +365,12 @@
           <label><input type="radio" name="mode-${r.id}" class="mode-none" value="none"> No branding to cover</label>
           <input type="text" class="text-input" placeholder="Polycool" value="${found ? 'Polycool' : ''}" style="display:none">
         </div>
+        <div class="mode-row theme-row">
+          <label>Card color:</label>
+          <label><input type="radio" name="theme-${r.id}" class="theme-auto" value="auto" checked> Auto-detect</label>
+          <label><input type="radio" name="theme-${r.id}" class="theme-light" value="light"> Light card</label>
+          <label><input type="radio" name="theme-${r.id}" class="theme-dark" value="dark"> Dark card</label>
+        </div>
         <div class="raw-actions">
           <button class="rebrand-btn" data-id="${r.id}">Rebrand &amp; queue for review</button>
           <button class="discard-btn" data-id="${r.id}">Discard</button>
@@ -495,6 +501,9 @@
         return;
       }
     }
+    const theme = item.querySelector('.theme-light').checked ? 'light'
+      : item.querySelector('.theme-dark').checked ? 'dark'
+      : 'auto';
     const payload = {
       x: item.querySelector('.box-x').value,
       y: item.querySelector('.box-y').value,
@@ -502,6 +511,7 @@
       h: item.querySelector('.box-h').value,
       mode,
       text,
+      theme,
     };
     btn.disabled = true;
     try{

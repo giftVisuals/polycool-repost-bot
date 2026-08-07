@@ -574,7 +574,7 @@ app.post("/api/raw/:id/rebrand", async (req, res) => {
     }
   }
 
-  const { x, y, w, h, mode, text } = req.body || {};
+  const { x, y, w, h, mode, text, theme: requestedTheme } = req.body || {};
   const box = { x: Math.round(Number(x)), y: Math.round(Number(y)), w: Math.round(Number(w)), h: Math.round(Number(h)) };
   if (!Number.isFinite(box.x) || !Number.isFinite(box.y) || box.w <= 0 || box.h <= 0) {
     return res.status(400).json({ ok: false, error: "Invalid box — drag a rectangle over the branding first." });
@@ -586,7 +586,10 @@ app.post("/api/raw/:id/rebrand", async (req, res) => {
   const rawPath = path.join(RAW_DIR, item.filename);
   const outputPath = path.join(PENDING_DIR, item.filename);
   try {
-    const theme = await detectBoxTheme(rawPath, box);
+    const theme =
+      requestedTheme === "light" || requestedTheme === "dark"
+        ? requestedTheme
+        : await detectBoxTheme(rawPath, box);
     await rebrandVideo(rawPath, outputPath, box, mode, text, theme);
 
     state.pending.push({
